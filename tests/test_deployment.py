@@ -20,10 +20,24 @@ class DeploymentTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["tool"]["vercel"]["entrypoint"], "app:app")
+        pins = (root / "hackathon/requirements.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(sorted(config["project"]["dependencies"]), sorted(pins))
+        lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+        self.assertIn("gradio", {package["name"] for package in lock["package"]})
         from fastapi import FastAPI
         self.assertIsInstance(app, FastAPI)
         self.assertTrue(any(getattr(route, "path", None) == "/health" for route in app.routes))
         self.assertTrue(any(getattr(route, "path", None) == "" for route in app.routes))
+
+    def test_vercel_build_uses_a_real_source_file_without_framework_discovery(self):
+        root = Path(__file__).resolve().parent.parent
+        config = json.loads((root / "vercel.json").read_text(encoding="utf-8"))
+        self.assertNotIn("framework", config)
+        build, = config["builds"]
+        self.assertTrue((root / build["src"]).is_file())
+        self.assertEqual(build["src"], "app.py")
+        self.assertEqual(build["config"]["functions"]["app.py"]["maxDuration"], 300)
+        self.assertEqual(config["routes"], [{"src": "/(.*)", "dest": build["src"]}])
 
     def test_page_health_and_direct_callback_configuration(self):
         with TestClient(app) as client:

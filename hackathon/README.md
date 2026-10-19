@@ -88,9 +88,12 @@ on the installed Python 3.14.
 
 1. Import the GitHub repository into Vercel.
 2. Keep **Root Directory** at the repository root (`.`), not `hackathon`.
-3. Use the **FastAPI** framework preset. Leave Build Command and Output Directory
-   overrides unset. Vercel detects `app.py` and installs root `requirements.txt`.
-   `pyproject.toml` explicitly selects `app:app` as the application entry point.
+3. Leave Build Command and Output Directory overrides unset. `vercel.json`
+   explicitly builds `app.py` with the pinned Python runtime and routes all paths
+   to it. This bypasses FastAPI framework entry-point discovery. Existing framework
+   settings do not override this explicit build configuration. Dependencies are
+   installed from `pyproject.toml` and `uv.lock`. The project file also declares
+   `app:app`; local pip commands continue to use `requirements.txt`.
 4. Apply `hackathon/db/supabase_schema.sql` in the Supabase SQL Editor.
 5. Configure these server environment variables for Production and/or Preview:
 
