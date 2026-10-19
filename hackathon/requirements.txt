@@ -1,0 +1,5 @@
+gradio==5.50.0
+pandas==2.3.3
+psycopg2-binary==2.9.11
+requests==2.34.2
+python-dotenv==1.2.1
