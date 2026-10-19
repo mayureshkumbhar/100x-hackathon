@@ -11,11 +11,13 @@ environment (or hackathon/.env). If a variable is not set, the DEFAULT_* values 
 import json
 import logging
 import os
+import runpy
 import threading
 import time
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from uuid import uuid4
+from functools import wraps
 
 import psycopg2
 import requests
@@ -25,14 +27,16 @@ logger = logging.getLogger("eval_copilot.target_api")
 logger.setLevel(logging.INFO)
 logger.propagate = False
 if not logger.handlers:
-    log_dir = Path(__file__).resolve().parent.parent / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    file_handler = RotatingFileHandler(
-        log_dir / "api.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
     console_handler = logging.StreamHandler()
-    for handler in (file_handler, console_handler):
+    handlers = [console_handler]
+    if not os.getenv("VERCEL"):
+        log_dir = Path(__file__).resolve().parent.parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(RotatingFileHandler(
+            log_dir / "api.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        ))
+    for handler in handlers:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
@@ -43,8 +47,16 @@ except ImportError:
     pass
 
 # Fallbacks used only when the environment variable is not set. Do not commit real secrets.
-DEFAULT_DATABASE_URL = "PASTE_SUPABASE_POSTGRES_CONNECTION_STRING_HERE"
-DEFAULT_GROQ_API_KEY = "PASTE_GROQ_API_KEY_HERE"
+DEFAULT_DATABASE_URL = 'PASTE_SUPABASE_POSTGRES_CONNECTION_STRING_HERE'
+DEFAULT_GROQ_API_KEY = 'PASTE_GROQ_API_KEY_HERE'
+
+# Retain private local fallbacks without including them in Git or deployments.
+_settings_path = Path(__file__).resolve().parent.parent / "local_settings.py"
+if not os.getenv("VERCEL") and _settings_path.is_file():
+    _settings = runpy.run_path(str(_settings_path))
+    DEFAULT_DATABASE_URL = _settings.get("DEFAULT_DATABASE_URL", DEFAULT_DATABASE_URL)
+    DEFAULT_GROQ_API_KEY = _settings.get("DEFAULT_GROQ_API_KEY", DEFAULT_GROQ_API_KEY)
+    del _settings
 
 
 def _configured(value):
@@ -53,13 +65,13 @@ def _configured(value):
 
 
 def get_database_url():
-    return _configured(os.getenv("DATABASE_URL")) or _configured(DEFAULT_DATABASE_URL)
+    return _configured(os.getenv("DATABASE_URL")) or ("" if os.getenv("VERCEL") else _configured(DEFAULT_DATABASE_URL))
 
 
 def get_groq_key():
     """Read the environment first, then the configured local default."""
     return (_configured(os.getenv("GROQ_API_KEY")) or _configured(os.getenv("GROQ_API"))
-            or _configured(DEFAULT_GROQ_API_KEY))
+            or ("" if os.getenv("VERCEL") else _configured(DEFAULT_GROQ_API_KEY)))
 
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -80,6 +92,8 @@ CREATE TABLE IF NOT EXISTS result(
   answer TEXT, passed BOOLEAN NOT NULL, checks JSONB NOT NULL);
 CREATE INDEX IF NOT EXISTS result_run_idx ON result(run_id);
 CREATE INDEX IF NOT EXISTS result_pair_idx ON result(pair_id);
+CREATE INDEX IF NOT EXISTS golden_pair_app_idx ON golden_pair(app_id);
+CREATE INDEX IF NOT EXISTS run_app_idx ON run(app_id);
 ALTER TABLE app ENABLE ROW LEVEL SECURITY;
 ALTER TABLE golden_pair ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run ENABLE ROW LEVEL SECURITY;
@@ -89,6 +103,25 @@ ALTER TABLE result ENABLE ROW LEVEL SECURITY;
 _local = threading.local()
 _schema_lock = threading.Lock()
 _schema_ready = False
+
+
+def database_session(fn):
+    """Release thread-local connections after a callback, including nested callbacks."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        _local.depth = getattr(_local, "depth", 0) + 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _local.depth -= 1
+            if not _local.depth:
+                conn = getattr(_local, "conn", None)
+                if conn is not None:
+                    try:
+                        conn.close()
+                    finally:
+                        _local.conn = None
+    return wrapped
 
 
 def connect():
@@ -107,17 +140,20 @@ def connect():
     url = get_database_url()
     if not url:
         raise RuntimeError("No database URL found. Set the DATABASE_URL environment variable "
-                           "or fill DEFAULT_DATABASE_URL in api/api.py")
+                           "or fill DEFAULT_DATABASE_URL in local_settings.py for local use")
     try:
-        conn = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=10)
+        options = {"sslmode": "require"} if os.getenv("VERCEL") else {}
+        conn = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=10, **options)
     except psycopg2.OperationalError as e:
-        raise RuntimeError(f"Could not connect to Supabase: {str(e).strip()[:300]}")
+        raise RuntimeError("Could not connect to Supabase. Check DATABASE_URL, SSL, and database network access.") from e
     conn.autocommit = True
     _local.conn = conn
-    with _schema_lock:
-        if not _schema_ready:
-            conn.cursor().execute(SCHEMA)
-            _schema_ready = True
+    auto_init = os.getenv("AUTO_INIT_SCHEMA", "false" if os.getenv("VERCEL") else "true").lower() == "true"
+    if auto_init:
+        with _schema_lock:
+            if not _schema_ready:
+                conn.cursor().execute(SCHEMA)
+                _schema_ready = True
     return conn
 
 
@@ -230,7 +266,7 @@ def _all_unverified(checks, why):
     return [{"check": c, "passed": None, "reason": f"Judge error: {why}"} for c in checks]
 
 
-def judge_with_groq(user_input, answer, checks, api_key, model=DEFAULT_MODEL):
+def judge_with_groq(user_input, answer, checks, api_key, model=DEFAULT_MODEL, deadline=None):
     """Returns [{check, passed(True/False/None), reason}] aligned with `checks`."""
     facts = f"word_count={len(answer.split())}, character_count={len(answer)}"
     numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(checks, 1))
@@ -246,11 +282,17 @@ def judge_with_groq(user_input, answer, checks, api_key, model=DEFAULT_MODEL):
     }
     last_err = "unknown"
     for attempt in range(3):
+        remaining = deadline - time.monotonic() if deadline is not None else 60
+        if remaining <= 0:
+            return _all_unverified(checks, "Run time budget exhausted")
         try:
-            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {api_key}"}, json=payload, timeout=60)
+            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {api_key}"}, json=payload, timeout=min(60, remaining))
             if r.status_code == 429 or r.status_code >= 500:
                 last_err = f"Groq HTTP {r.status_code}"
-                time.sleep(2 * (attempt + 1))
+                delay = 2 * (attempt + 1)
+                if deadline is not None:
+                    delay = min(delay, max(0, deadline - time.monotonic()))
+                time.sleep(delay)
                 continue
             if r.status_code >= 400:
                 return _all_unverified(checks, f"Groq HTTP {r.status_code}: {r.text[:200]}")
@@ -274,18 +316,24 @@ def judge_with_groq(user_input, answer, checks, api_key, model=DEFAULT_MODEL):
 def run_cases(conn, app_id, pair_ids, api_key,
               model=DEFAULT_MODEL, note="", on_progress=None):
     """Creates one new run. Old runs are never touched. Returns run_id."""
+    budget = float(os.getenv("EVAL_RUN_TIMEOUT_SECONDS", "240" if os.getenv("VERCEL") else "0"))
+    deadline = time.monotonic() + budget if budget > 0 else None
     url = _exec(conn, "SELECT url FROM app WHERE id=%s", (app_id,)).fetchone()["url"]
     run_id = _exec(conn, "INSERT INTO run(app_id, note) VALUES(%s,%s) RETURNING id", (app_id, note)).fetchone()["id"]
     for n, pid in enumerate(pair_ids, 1):
         pair = _exec(conn, "SELECT * FROM golden_pair WHERE id=%s", (pid,)).fetchone()
         checks = parse_checks(pair["rules"])
-        answer, err = call_app(url, pair["user_input"])
+        remaining = deadline - time.monotonic() if deadline is not None else 60
+        if remaining <= 0:
+            answer, err = "", "Run time budget exhausted"
+        else:
+            answer, err = call_app(url, pair["user_input"], timeout=min(60, remaining))
         if err:
             verdicts = [{"check": "App responded", "passed": False, "reason": err}] + [
                 {"check": c, "passed": None, "reason": "Not evaluated: app did not respond"} for c in checks]
             answer = answer or f"[{err}]"
         else:
-            verdicts = judge_with_groq(pair["user_input"], answer, checks, api_key, model)
+            verdicts = judge_with_groq(pair["user_input"], answer, checks, api_key, model, deadline=deadline)
         passed = all(v["passed"] is True for v in verdicts)
         _exec(conn, "INSERT INTO result(run_id, pair_id, answer, passed, checks) VALUES(%s,%s,%s,%s,%s)",
               (run_id, pid, answer, passed, Json(verdicts)))

@@ -6,3 +6,7 @@ __pycache__/
 !.env.example
 .gradio/
 logs/
+local_settings.py
+.publish-repo/
+.vercel/
+.pytest_cache/

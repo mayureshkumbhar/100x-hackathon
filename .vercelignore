@@ -1,0 +1,11 @@
+.git
+.publish-repo
+**/.venv
+**/__pycache__
+**/.gradio
+**/logs
+**/.env
+**/.env.*
+**/local_settings.py
+tests
+.pytest_cache

@@ -1,7 +1,7 @@
 """hackathon/ui/ui.py: Eval Co-pilot Gradio UI. Imports the logic from hackathon/api/api.py.
 
   pip install -r requirements.txt
-  Set DATABASE_URL and GROQ_API_KEY in the environment or api/api.py defaults.
+  Set DATABASE_URL and GROQ_API_KEY in the environment or local_settings.py.
   python ui/ui.py        (run from the hackathon folder)
 """
 import sys
@@ -35,7 +35,7 @@ def rows_from_df(df):
 def get_key():
     key = core.get_groq_key()
     if not key:
-        raise gr.Error("No Groq API key found. Set GROQ_API_KEY in the environment or DEFAULT_GROQ_API_KEY in api/api.py.")
+        raise gr.Error("No Groq API key found. Set GROQ_API_KEY in the environment or DEFAULT_GROQ_API_KEY in local_settings.py for local use.")
     return key
 
 
@@ -58,6 +58,7 @@ def render_run(conn, app_id, run_id):
     return summary, pd.DataFrame(table, columns=["Case", "Result", "Failed checks"]), cases, runs, runs
 
 
+@core.database_session
 def run_all(url, df, progress=gr.Progress()):
     url = clean(url)
     if not url.startswith("http"):
@@ -76,6 +77,7 @@ def run_all(url, df, progress=gr.Progress()):
     return render_run(conn, app_id, run_id)
 
 
+@core.database_session
 def show_case(pair_id):
     if not pair_id:
         return "Pick a case."
@@ -89,6 +91,7 @@ def show_case(pair_id):
             f"**Their app said**\n\n{r['answer']}\n\n**Checks**\n\n{checks}")
 
 
+@core.database_session
 def rerun_one(pair_id, url):
     if not pair_id:
         raise gr.Error("Pick a case first.")
@@ -101,6 +104,7 @@ def rerun_one(pair_id, url):
     return show_case(pair_id), runs, runs
 
 
+@core.database_session
 def compare(a, b):
     if not a or not b:
         raise gr.Error("Pick two runs.")
@@ -132,10 +136,13 @@ with gr.Blocks(title="Eval Co-pilot", theme=gr.themes.Soft()) as demo:
             cmp_btn = gr.Button("Compare", variant="primary")
             cmp_table = gr.Dataframe(label="Fixed cases appear first", interactive=False, wrap=True)
 
-    go.click(run_all, [url, pairs], [summary, results, case, run_a, run_b])
-    case.change(show_case, case, detail)
-    again.click(rerun_one, [case, url], [detail, run_a, run_b])
-    cmp_btn.click(compare, [run_a, run_b], cmp_table)
+    # Direct requests avoid queue state being split across serverless instances.
+    go.click(run_all, [url, pairs], [summary, results, case, run_a, run_b], queue=False)
+    # Dropdown updates may have been served by a different function instance.
+    # Accept their IDs directly and look up the actual records in Postgres.
+    case.change(show_case, case, detail, queue=False, preprocess=False)
+    again.click(rerun_one, [case, url], [detail, run_a, run_b], queue=False, preprocess=False)
+    cmp_btn.click(compare, [run_a, run_b], cmp_table, queue=False, preprocess=False)
 
 if __name__ == "__main__":
     demo.launch()
