@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
@@ -15,6 +16,15 @@ from hackathon.ui.ui import core
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_explicit_vercel_entrypoint_exports_the_mounted_application(self):
+        root = Path(__file__).resolve().parent.parent
+        config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(config["tool"]["vercel"]["entrypoint"], "app:app")
+        from fastapi import FastAPI
+        self.assertIsInstance(app, FastAPI)
+        self.assertTrue(any(getattr(route, "path", None) == "/health" for route in app.routes))
+        self.assertTrue(any(getattr(route, "path", None) == "" for route in app.routes))
+
     def test_page_health_and_direct_callback_configuration(self):
         with TestClient(app) as client:
             self.assertEqual(client.get("/").status_code, 200)

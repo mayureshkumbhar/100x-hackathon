@@ -22,7 +22,7 @@ def health():
 
 
 root = Path(__file__).resolve().parent
-app = gr.mount_gradio_app(
+gr.mount_gradio_app(
     app, demo, path="/", ssr_mode=False,
     blocked_paths=[str(root / "hackathon" / "local_settings.py"),
                    str(root / "hackathon" / ".env"), str(root / ".env"),

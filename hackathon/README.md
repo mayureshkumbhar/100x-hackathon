@@ -90,6 +90,7 @@ on the installed Python 3.14.
 2. Keep **Root Directory** at the repository root (`.`), not `hackathon`.
 3. Use the **FastAPI** framework preset. Leave Build Command and Output Directory
    overrides unset. Vercel detects `app.py` and installs root `requirements.txt`.
+   `pyproject.toml` explicitly selects `app:app` as the application entry point.
 4. Apply `hackathon/db/supabase_schema.sql` in the Supabase SQL Editor.
 5. Configure these server environment variables for Production and/or Preview:
 
