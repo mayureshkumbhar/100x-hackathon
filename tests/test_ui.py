@@ -1,5 +1,6 @@
 import re
 import unittest
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from app import app, demo
 from ui_logic import compare_runs, inspect_case, validate_draft
@@ -32,9 +33,23 @@ class ValidationTests(unittest.TestCase):
 
 
 class AppTests(unittest.TestCase):
+    def test_live_gradio_callback(self):
+        index = next(i for i, fn in demo.fns.items() if fn.fn and fn.fn.__name__ == "evaluate_request")
+        with TestClient(app) as client, \
+             patch.dict("os.environ", {"GROQ_API_KEY": "groq-fake", "JEV_API_KEY": "jev-fake"}), \
+             patch("evaluation.generate", new=AsyncMock(return_value="A 7 day plan.")), \
+             patch("evaluation.judge", new=AsyncMock(return_value=[["Has a number", "PASS", "90%"]])):
+            response = client.post("/gradio_api/run/predict", json={
+                "fn_index": index, "data": ["Give me a plan", "Has a number"]})
+            self.assertEqual(response.status_code, 200)
+            answer, verdict, rows = response.json()["data"]
+            self.assertEqual(answer, "A 7 day plan.")
+            self.assertTrue(verdict.startswith("PASS"))
+            self.assertEqual(rows["data"][0][1], "PASS")
+
     def test_assets_and_stateless_callbacks(self):
         with TestClient(app) as client:
-            self.assertEqual(client.get("/healthz").json(), {"status": "ok", "mode": "demo"})
+            self.assertEqual(client.get("/healthz").json(), {"status": "ok", "mode": "groq-jev"})
             response = client.get("/")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["cache-control"], "no-store")
