@@ -87,7 +87,9 @@ on the installed Python 3.14.
 ## Vercel deployment
 
 1. Import the GitHub repository into Vercel.
-2. Keep **Root Directory** at the repository root (`.`), not `hackathon`.
+2. Set **Root Directory** to either the repository root (`.`) or `hackathon`.
+   Both directories contain their own `app.py`, `vercel.json`, Python version,
+   dependency metadata and lockfile. Leave Output Directory override disabled.
 3. Leave Build Command and Output Directory overrides unset. `vercel.json`
    explicitly builds `app.py` with the pinned Python runtime and routes all paths
    to it. This bypasses FastAPI framework entry-point discovery. Existing framework
@@ -142,3 +144,13 @@ hackathon/.venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
 Tests use mocked network/database services and do not call Groq or your target app.
+
+
+## Diagnosing a deployment that serves source files
+
+Resources must list a Python Function for `app.py`. A deployment showing only static
+assets such as `/api/api.py` and `/ui/ui.py` has published source files instead of
+running the app. Select the repository root or `hackathon` as Root Directory, leave
+Build Command and Output Directory overrides disabled, and deploy the latest commit.
+The `vercel.json` in either supported root builds the function and routes requests
+to `/app.py`. Check `/health` after the deployment is marked Production / Current.

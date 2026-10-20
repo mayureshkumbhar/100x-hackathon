@@ -16,6 +16,25 @@ from hackathon.ui.ui import core
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_hackathon_subdirectory_runs_as_a_standalone_project(self):
+        root = Path(__file__).resolve().parent.parent
+        nested = root / "hackathon"
+        for name in ("vercel.json", "pyproject.toml", "uv.lock", ".python-version", ".vercelignore"):
+            self.assertEqual((root / name).read_bytes(), (nested / name).read_bytes(), name)
+        script = '''
+from fastapi.testclient import TestClient
+from app import app
+with TestClient(app) as client:
+    assert client.get('/health').json() == {'status': 'ok'}
+    assert client.get('/').status_code == 200
+    assert all(not d['queue'] for d in client.get('/config').json()['dependencies'])
+print('standalone hackathon passed')
+'''
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        result = subprocess.run([sys.executable, "-B", "-c", script], capture_output=True,
+                                text=True, cwd=nested, env=env, timeout=40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_explicit_vercel_entrypoint_exports_the_mounted_application(self):
         root = Path(__file__).resolve().parent.parent
         config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))

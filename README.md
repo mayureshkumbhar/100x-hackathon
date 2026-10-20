@@ -15,5 +15,6 @@ hackathon/.venv/Scripts/python.exe app.py
 ```
 
 Open http://127.0.0.1:7860. Skip the copy command if `.env` already exists.
-For Vercel, import the repository at its root, apply
+For Vercel, set Root Directory to `.` or `hackathon` and leave Output Directory
+override disabled. Both roots contain deployment configuration. Apply
 `hackathon/db/supabase_schema.sql`, and set the environment variables in the setup guide.

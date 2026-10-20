@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python@25.1.2",
+      "config": {
+        "functions": {
+          "app.py": {
+            "maxDuration": 300
+          }
+        },
+        "excludeFiles": "{.vercel-debug/**,.publish-repo/**,**/.venv/**,**/__pycache__/**,**/logs/**,**/.gradio/**,**/.env,**/.env.*,**/local_settings.py,tests/**}"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/app.py"
+    }
+  ]
+}
