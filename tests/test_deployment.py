@@ -37,7 +37,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((root / build["src"]).is_file())
         self.assertEqual(build["src"], "app.py")
         self.assertEqual(build["config"]["functions"]["app.py"]["maxDuration"], 300)
-        self.assertEqual(config["routes"], [{"src": "/(.*)", "dest": build["src"]}])
+        self.assertEqual(config["routes"], [{"src": "/(.*)", "dest": "/" + build["src"]}])
 
     def test_page_health_and_direct_callback_configuration(self):
         with TestClient(app) as client:
